@@ -1,0 +1,396 @@
+import math
+
+from .parser import Parser
+from .nodes import *
+import time
+from .tokens import *
+
+from .lexer import Lexer
+
+class Environment:
+    def __init__(self, parent=None):
+        self.variables = {}
+        self.classes = {}
+        self.functions = {}
+        self.parent = parent
+
+    def get(self, name):
+        if name in self.variables:
+            return self.variables[name]
+        elif self.parent:
+            return self.parent.get(name)
+        raise NameError(f"Variable '{name}' not found")
+
+    def set(self, name, value):
+        self.variables[name] = value
+
+    def set_func(self, name, body):
+        self.functions[name] = body
+
+    def get_func(self, name):
+        if name in self.functions:
+            return self.functions[name]
+        elif self.parent:
+            return self.parent.get_func(name)
+        raise NameError(f"Function '{name}' not found")
+
+    def set_class(self, class_name, methods):
+        self.classes[class_name] = methods
+
+    def get_class(self, name):
+        if name in self.classes:
+            return self.classes[name]
+        elif self.parent:
+            return self.parent.get_class(name)
+        raise NameError(f"Class '{name}' not found")
+
+class Interpreter:
+    def __init__(self):
+        self.global_env = Environment()
+
+    def interpret(self, node, env=None):
+        self.visit(node, env)
+
+    def visit(self, node, env=None):
+        method_name = f"visit_{type(node).__name__}"
+        method = getattr(self, method_name, self.generic_visit)
+        return method(node, env or self.global_env)
+
+    def generic_visit(self, node, env):
+        raise NotImplementedError(f"No visit_{type(node).__name__} method")
+
+    def visit_ImportModuleVariableNode(self, node, env):
+        parts = node.var_name.split(".")
+        current = env.get(parts[0])
+        for attr in parts[1:]:  # Go through the rest
+            if isinstance(current, dict):
+                if attr in current:
+                    current = current[attr]
+                else:
+                    raise Exception(f"Attribute '{attr}' not found in {current}")
+            else:
+                raise Exception(f"Cannot access '{attr}' on non-dict type '{type(current).__name__}'")
+
+        return current
+
+    def visit_ProgramNode(self, node, env):
+        for stmt in node.statements:
+            result = self.visit(stmt, env)
+            if isinstance(result, ReturnNode):
+                return result.value
+
+    def visit_NumberNode(self, node, _):
+        return node.value
+
+    def visit_StringNode(self, node, _):
+        return node.value
+
+    def visit_BooleanNode(self, node, _):
+        return node.value
+
+    def visit_UnaryOpNode(self, node, env):
+        value = self.visit(node.operand, env)
+        if node.operator == "-":
+            return -value
+        else:
+            raise TypeError(f"Unknown unary operator: {node.operator}")
+
+    def visit_ForNode(self, node, env):
+        iterable = self.visit(node.iterable, env)
+        for i in iterable:
+            env.set(node.var_name, self.visit(i, env))
+            for nodeinfor in node.body:
+                self.visit(nodeinfor, env)
+
+    def visit_ListNode(self, node, _):
+        return node.items
+
+    def visit_AssignmentNode(self, node, env):
+        value = self.visit(node.value, env)
+        parts = node.var_name.var_name.split(".")
+
+        if len(parts) == 1:
+            env.set(parts[0], value)
+        else:
+            obj = env.get(parts[0])
+            for part in parts[1:-1]:
+                if not isinstance(obj, dict):
+                    raise Exception(f"Cannot assign into '{part}' on non-dict type '{type(obj).__name__}'")
+                obj = obj.setdefault(part, {})
+            obj[parts[-1]] = value
+
+    def visit_ModifiedAssignmentNode(self, node, env):
+        if isinstance(node.var_name, IndexAccessNode):
+            parts = node.var_name.var_name.var_name.split(".")
+        else:
+            parts = node.var_name.split(".")
+        if len(parts) == 1:
+            old_value = env.get(parts[0])
+        else:
+            obj = env.get(parts[0])
+            for part in parts[1:-1]:
+                if not isinstance(obj, dict):
+                    raise Exception(f"Cannot modify '{part}' on non-dict type '{type(obj).__name__}'")
+                obj = obj.get(part)
+                if obj is None:
+                    raise NameError(f"Variable path '{'.'.join(parts)}' not found")
+            old_value = obj.get(parts[-1])
+
+        new_value = self.visit(node.value, env)
+
+        if node.operator == "+=":
+            result = old_value + new_value
+        elif node.operator == "-=":
+            result = old_value - new_value
+        elif node.operator == "*=":
+            result = old_value * new_value
+        elif node.operator == "/=":
+            result = old_value / new_value
+        elif node.operator == "=":
+            result = new_value
+        else:
+            raise Exception(f"Unsupported operator {node.operator}")
+
+        if isinstance(node.var_name, IndexAccessNode):
+            old_value[self.visit(node.var_name.index_expr, env)] = result
+            if len(parts) == 1:
+                env.parent.set(parts[0], old_value)  # I don't know but it works
+            else:
+                obj[parts[-1]] = old_value
+            return
+        if len(parts) == 1:
+            env.parent.set(parts[0], result)  # I don't know but it works
+        else:
+            obj[parts[-1]] = result
+
+    def visit_VarAccessNode(self, node, env):
+        parts = node.var_name.split(".")
+        current = env.get(parts[0])
+        for attr in parts[1:]:  # Go through the rest
+            if isinstance(current, dict):
+                if attr in current:
+                    current = current[attr]
+                else:
+                    raise Exception(f"Attribute '{attr}' not found in {current}")
+            else:
+                raise Exception(f"Cannot access '{attr}' on non-dict type '{type(current).__name__}'")
+
+        return current
+
+    def visit_AttrAccessNode(self, node, env):
+        return self.visit(VarAccessNode(self.getAttrName(node)), env)
+
+    def getAttrName(self, node: AttrAccessNode):
+        if isinstance(node.base, AttrAccessNode):
+            base = self.getAttrName(node.base)
+        else:
+            base = node.base.var_name
+        return f"{base}.{node.attr.var_name}"
+
+    def visit_BinOpNode(self, node, env):
+        left = self.visit(node.left, env)
+        right = self.visit(node.right, env)
+        if node.operator == "+":
+            return left + right
+        elif node.operator == "-":
+            return left - right
+        elif node.operator == "*":
+            return left * right
+        elif node.operator == "/":
+            return left / right
+        elif node.operator == ">":
+            return left > right
+        elif node.operator == "<":
+            return left < right
+        elif node.operator == ">=":
+            return left >= right
+        elif node.operator == "<=":
+            return left <= right
+        elif node.operator == "==":
+            return left == right
+        elif node.operator == "%":
+            return left % right
+
+    def visit_ReturnNode(self, node, env):
+        return self.visit(node.value, env)
+
+    def visit_IfNode(self, node, env):
+        if self.visit(node.condition, env):
+            return self.execute_block(node.body, env)
+        for cond, block in node.elif_blocks:
+            if self.visit(cond, env):
+                return self.execute_block(block, env)
+        if node.else_body:
+            return self.execute_block(node.else_body, env)
+
+    def visit_WhileNode(self, node, env):
+        while self.visit(node.condition, env):
+            self.execute_block(node.body, env)
+
+    def visit_FunctionDefNode(self, node, env):
+        env.set_func(node.func_name, (node.params, node.body))
+
+    def visit_FunctionCallNode(self, node, env):
+        if node.func_name == "print":
+            args = [self.visit(arg, env) for arg in node.args]
+            print(*args)
+            return
+        elif node.func_name == "sleep":
+            sleep_time = self.visit(node.args[0], env)
+            time.sleep(sleep_time)
+            return
+        elif node.func_name == "floor":
+            value = self.visit(node.args[0], env)
+            return math.floor(value)
+        elif node.func_name == "len":
+            obj = self.visit(node.args[0], env)
+            return len(obj)
+        elif node.func_name == "fmt":
+            args = []
+            for arg in node.args:
+                args.append(self.visit(arg, env))
+
+            return args[0].format(*args[1:])
+
+        # Try function first
+        try:
+            params, body = env.get_func(node.func_name)
+        except NameError:
+            pass
+        else:
+            local_env = Environment(env)
+            for (param_name, _), arg in zip(params, node.args):
+                local_env.set(param_name, self.visit(arg, env))
+            return self.execute_block(body, local_env)
+
+        # Try class constructor
+
+        class_node = env.get_class(node.func_name)
+        if class_node is None:
+            raise NameError(f"Function '{node.func_name}' is not defined")
+
+        # Instantiate object
+        obj = BeautyfiedDict()
+        obj["__class__"] = class_node.class_name
+        obj["__methods__"] = {}
+
+        # Register methods
+        for method in class_node.methods:
+            obj["__methods__"][method.func_name] = method
+
+        # Create instance environment and call construct if it exists
+        init_method = obj["__methods__"].get("construct")
+        if init_method:
+            init_env = Environment(env)
+            init_env.set("this", obj)
+            for (param_name, _), arg in zip(init_method.params[1:], node.args):  # Skip 'this'
+                init_env.set(param_name, self.visit(arg, env))
+            self.execute_block(init_method.body, init_env)
+
+        return obj
+
+    def visit_ClassNode(self, node, env):
+        env.set_class(node.class_name, node)
+
+    def visit_MethodCallNode(self, node, env: Environment):
+        obj = self.visit(node.caller, env)
+        if isinstance(obj, list):
+            if node.method_name == "append":
+                thing = env.get("this")
+                obj = thing[node.caller.var_name.split(".")[-1]]
+                obj.append(1)
+                thing[node.caller.var_name.split(".")[-1]] = obj
+                env.set("this", thing)
+                return
+        method_name = node.method_name
+        method = obj['__methods__'].get(method_name)
+
+        if not method:
+            raise Exception(f"Method {method_name} not found")
+
+        local_env = Environment()
+        local_env.set("this", obj)
+        params = len(method.params) - 1
+        if len(node.args) < params:
+            missing = params - len(node.args)
+            error = f"{method_name}() missing {params - len(node.args)} required positional argument{"s" * (missing == 1)}: "
+            for i in range(len(node.args), params):
+                error += "'" + method.params[i][0] + "'"
+            raise TypeError(error)
+        argi = 0
+        for i in range(params):
+            param = method.params[i]
+            if param[0] == "this": continue
+            param_name = param[0]
+            arg = node.args[argi]
+            local_env.set(param_name, self.visit(arg, env))
+            argi += 1
+        return self.execute_block(method.body, local_env)
+
+    def visit_RangeNode(self, node, env):
+        nodes = []
+        for i in range(self.visit(node.start, env), self.visit(node.end, env) + (1 if node.inclusive else 0)):
+            nodes.append(NumberNode(i))
+        return nodes
+
+    def visit_IndexAccessNode(self, node, env):
+        iterable_ = self.visit(node.var_name, env)
+        if isinstance(iterable_, dict):
+            used_iterable = {}
+            for key, value in iterable_.items():
+                key = self.visit(key, env)
+                value = self.visit(value, env)
+                used_iterable[key] = value
+        else:
+            used_iterable = []
+            for value in iterable_:
+                if isinstance(value, ASTNode):
+                    used_iterable.append(self.visit(value, env))
+                else:
+                    used_iterable.append(value)
+        return used_iterable[self.visit(node.index_expr, env)]
+
+    def visit_DictNode(self, node, env):
+        return node.dict
+
+    def visit_ImportNode(self, node, env):
+        # 1. Read + lex + parse the module
+        with open(node.module_name + ".gum", "r") as f:
+            tokens = Lexer().lex(f.read())
+        ast = Parser(tokens).parse()
+
+        # 2. Execute it inside its own environment
+        mod_env = Environment()
+        self.visit(ast, mod_env)
+
+        # 3. Build a module object
+        fake = {}
+        fake["__methods__"] = {}
+        fake["__class__"] = node.module_name
+
+        # variables
+        for name, value in mod_env.variables.items():
+            fake[name] = value
+
+        # functions
+        for func_name, body in mod_env.functions.items():
+            fake["__methods__"][func_name] = body
+
+        # classes
+        for class_name, class_ in mod_env.classes.items():
+            func = FunctionDefNode(class_name, (), [
+                *mod_env.classes.values(),
+                ReturnNode(FunctionCallNode(class_name, ())) # return CLASS_NAME()
+            ])
+            fake["__methods__"][class_name] = func
+
+        # 4. Bind module
+        env.set(node.module_name, fake)
+
+    def execute_block(self, block, env):
+        result = None
+        for stmt in block:
+            result = self.visit(stmt, env)
+            if isinstance(result, ReturnNode):
+                return result
+        return result

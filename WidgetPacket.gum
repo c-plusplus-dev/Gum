@@ -1,0 +1,31 @@
+object WidgetDraw {
+    def construct(this) {}
+    def send(this, object_: int) {} # just for the looks
+    def ColorRect(this, x: float, y: float, w: float, h: float, r: int, g: int, b: int, a: int) {
+        print("RECT", x, y, w, h, r, g, b, a)
+        return 0
+    }
+    def Line(this, x1: float, y1: float, x2: float, y2: float, thickness: float, r: int, g: int, b: int, a: int) {
+        print("LINE", x1, y1, x2, y2, thickness, r, g, b, a)
+        return 0
+    }
+    def Text(this, x: float, y: float, text: str, r: int, g: int, b: int, a: int) {
+        print("TEXT", x, y, text, r, g, b, a)
+        return 0
+    }
+}
+
+object WidgetVariables {
+    def construct(this) {
+        let this.cpuUsagesLength = 32;
+        let this.cpuUsages = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        let this.cpuUsage = 0
+    }
+}
+
+object Widget {
+    def construct(this) {
+        let this.Draw = WidgetDraw()
+        let this.Variables = WidgetVariables()
+    }
+}

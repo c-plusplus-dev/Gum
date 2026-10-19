@@ -1,0 +1,51 @@
+def main() {
+    let d: dict = {}
+
+    print("=== Empty ===")
+    print(d)
+
+    print("\n=== Insert ===")
+    d["name"] = "Ayaan"
+    d["age"] = 10
+    d["pi"] = 3.14159
+    d["cool"] = true
+
+    print(d)
+
+    print("\n=== Read ===")
+    let name: str = d["name"]
+    let age: int = d["age"]
+    let pi: float = d["pi"]
+    let cool: bool = d["cool"]
+
+    print(name)
+    print(age)
+    print(pi)
+    print(cool)
+
+    print("\n=== Modify ===")
+    d["age"] = age + 1
+    d["name"] = "Bob"
+
+    print(d)
+
+    print("\n=== Read Again ===")
+    print(d["name"])
+    print(d["age"])
+
+    print("\n=== Overwrite Types ===")
+    d["test"] = 123
+    print(d["test"])
+
+    d["test"] = "hello"
+    print(d["test"])
+
+    d["test"] = false
+    print(d["test"])
+
+    print("\n=== Expression ===")
+    let x = d["age"] + 5
+    print(x)
+
+    print("\n=== Done ===")
+}
